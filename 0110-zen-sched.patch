@@ -1,0 +1,321 @@
+diff --git a/kernel/sched/alt_topology_test.c b/kernel/sched/alt_topology_test.c
+new file mode 100644
+index 0000000..6bdf2d4
+--- /dev/null
++++ b/kernel/sched/alt_topology_test.c
+@@ -0,0 +1,211 @@
++// SPDX-License-Identifier: GPL-2.0-only
++
++#include <kunit/test.h>
++
++/* This file is included by alt_topology.c so it can exercise static helpers. */
++
++struct sched_topology_test_case {
++	const char *name;
++	unsigned long active;
++	unsigned long pcore;
++	unsigned long ecore;
++	unsigned long unknown;
++	unsigned long smt;
++	enum sched_idle_select_mode mode;
++	bool heterogeneous;
++	bool mixed_cpu_types;
++	bool unsupported_ecore_smt;
++};
++
++struct sched_topology_test_masks {
++	cpumask_t active;
++	cpumask_t pcore;
++	cpumask_t ecore;
++	cpumask_t unknown;
++	cpumask_t smt;
++};
++
++static void sched_topology_test_mask(cpumask_t *mask, unsigned long bits)
++{
++	unsigned int cpu;
++
++	cpumask_clear(mask);
++	for_each_set_bit(cpu, &bits,
++			 min_t(unsigned int, BITS_PER_LONG, nr_cpu_ids))
++		cpumask_set_cpu(cpu, mask);
++}
++
++static void sched_topology_policy_test(struct kunit *test)
++{
++	static const struct sched_topology_test_case cases[] = {
++		{
++			.name = "uniformly unknown",
++			.active = BIT(0) | BIT(1),
++			.unknown = BIT(0) | BIT(1),
++			.mode = SCHED_IDLE_SELECT_GENERIC,
++		},
++		{
++			.name = "performance only",
++			.active = BIT(0) | BIT(1),
++			.pcore = BIT(0) | BIT(1),
++			.mode = SCHED_IDLE_SELECT_GENERIC,
++		},
++		{
++			.name = "efficiency only",
++			.active = BIT(0) | BIT(1),
++			.ecore = BIT(0) | BIT(1),
++			.mode = SCHED_IDLE_SELECT_GENERIC,
++		},
++		{
++			.name = "hybrid without SMT",
++			.active = BIT(0) | BIT(1),
++			.pcore = BIT(0),
++			.ecore = BIT(1),
++			.mode = SCHED_IDLE_SELECT_HYBRID,
++			.heterogeneous = true,
++		},
++		{
++			.name = "hybrid with P-core SMT",
++			.active = BIT(0) | BIT(1) | BIT(2),
++			.pcore = BIT(0) | BIT(1),
++			.ecore = BIT(2),
++			.smt = BIT(0) | BIT(1),
++			.mode = SCHED_IDLE_SELECT_HYBRID,
++			.heterogeneous = true,
++		},
++		{
++			.name = "hybrid with partial E-core SMT",
++			.active = BIT(0) | BIT(1) | BIT(2),
++			.pcore = BIT(0),
++			.ecore = BIT(1) | BIT(2),
++			.smt = BIT(1) | BIT(2),
++			.mode = SCHED_IDLE_SELECT_GENERIC,
++			.unsupported_ecore_smt = true,
++		},
++		{
++			.name = "hybrid with universal SMT",
++			.active = BIT(0) | BIT(1) | BIT(2) | BIT(3),
++			.pcore = BIT(0) | BIT(1),
++			.ecore = BIT(2) | BIT(3),
++			.smt = BIT(0) | BIT(1) | BIT(2) | BIT(3),
++			.mode = SCHED_IDLE_SELECT_SMT,
++			.unsupported_ecore_smt = true,
++		},
++		{
++			.name = "homogeneous SMT",
++			.active = BIT(0) | BIT(1),
++			.unknown = BIT(0) | BIT(1),
++			.smt = BIT(0) | BIT(1),
++			.mode = SCHED_IDLE_SELECT_SMT,
++		},
++		{
++			.name = "mixed known and unknown",
++			.active = BIT(0) | BIT(1) | BIT(2),
++			.pcore = BIT(0),
++			.ecore = BIT(1),
++			.unknown = BIT(2),
++			.mode = SCHED_IDLE_SELECT_GENERIC,
++			.mixed_cpu_types = true,
++		},
++		{
++			.name = "mixed topology with E-core SMT",
++			.active = BIT(0) | BIT(1) | BIT(2) | BIT(3),
++			.pcore = BIT(0),
++			.ecore = BIT(1) | BIT(2),
++			.unknown = BIT(3),
++			.smt = BIT(1) | BIT(2),
++			.mode = SCHED_IDLE_SELECT_GENERIC,
++			.mixed_cpu_types = true,
++			.unsupported_ecore_smt = true,
++		},
++	};
++	struct sched_topology_test_masks *masks;
++	struct sched_topology_policy policy;
++	int i;
++
++	if (nr_cpu_ids < 4) {
++		kunit_skip(test, "at least four CPU bits are required");
++		return;
++	}
++
++	masks = kunit_kzalloc(test, sizeof(*masks), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_NULL(test, masks);
++
++	for (i = 0; i < ARRAY_SIZE(cases); i++) {
++		const struct sched_topology_test_case *casep = &cases[i];
++
++		sched_topology_test_mask(&masks->active, casep->active);
++		sched_topology_test_mask(&masks->pcore, casep->pcore);
++		sched_topology_test_mask(&masks->ecore, casep->ecore);
++		sched_topology_test_mask(&masks->unknown, casep->unknown);
++		sched_topology_test_mask(&masks->smt, casep->smt);
++
++		sched_select_topology_policy(&masks->active, &masks->pcore,
++					     &masks->ecore, &masks->unknown,
++					     &masks->smt, &policy);
++
++		KUNIT_EXPECT_EQ_MSG(test, policy.idle_select_mode,
++				    casep->mode, "%s", casep->name);
++		KUNIT_EXPECT_EQ_MSG(test, policy.heterogeneous,
++				    casep->heterogeneous, "%s", casep->name);
++		KUNIT_EXPECT_EQ_MSG(test, policy.mixed_cpu_types,
++				    casep->mixed_cpu_types, "%s", casep->name);
++		KUNIT_EXPECT_EQ_MSG(test, policy.unsupported_ecore_smt,
++				    casep->unsupported_ecore_smt,
++				    "%s", casep->name);
++	}
++}
++
++static void sched_topology_group_class_test(struct kunit *test)
++{
++	struct sched_topology_test_masks *masks;
++	bool single_class;
++
++	if (nr_cpu_ids < 2) {
++		kunit_skip(test, "at least two CPU bits are required");
++		return;
++	}
++
++	masks = kunit_kzalloc(test, sizeof(*masks), GFP_KERNEL);
++	KUNIT_ASSERT_NOT_NULL(test, masks);
++
++	sched_topology_test_mask(&masks->active, BIT(0) | BIT(1));
++	sched_topology_test_mask(&masks->pcore, BIT(0) | BIT(1));
++	sched_topology_test_mask(&masks->ecore, 0);
++	sched_topology_test_mask(&masks->unknown, 0);
++	single_class = sched_group_has_single_class(&masks->active,
++						    &masks->pcore,
++						    &masks->ecore,
++						    &masks->unknown);
++	KUNIT_EXPECT_TRUE(test, single_class);
++
++	sched_topology_test_mask(&masks->pcore, BIT(0));
++	sched_topology_test_mask(&masks->ecore, BIT(1));
++	single_class = sched_group_has_single_class(&masks->active,
++						    &masks->pcore,
++						    &masks->ecore,
++						    &masks->unknown);
++	KUNIT_EXPECT_FALSE(test, single_class);
++
++	sched_topology_test_mask(&masks->pcore, 0);
++	sched_topology_test_mask(&masks->ecore, 0);
++	sched_topology_test_mask(&masks->unknown, BIT(0) | BIT(1));
++	single_class = sched_group_has_single_class(&masks->active,
++						    &masks->pcore,
++						    &masks->ecore,
++						    &masks->unknown);
++	KUNIT_EXPECT_TRUE(test, single_class);
++}
++
++static struct kunit_case sched_topology_test_cases[] = {
++	KUNIT_CASE(sched_topology_policy_test),
++	KUNIT_CASE(sched_topology_group_class_test),
++	{}
++};
++
++static struct kunit_suite sched_topology_test_suite = {
++	.name = "sched-alt-topology",
++	.test_cases = sched_topology_test_cases,
++};
++
++kunit_test_suite(sched_topology_test_suite);
+diff --git a/kernel/sched/core.c b/kernel/sched/core.c
+index 1754d9f..4849135 100644
+--- a/kernel/sched/core.c
++++ b/kernel/sched/core.c
+@@ -5097,7 +5097,7 @@ static inline void prepare_task(struct task_struct *next)
+ 	WRITE_ONCE(next->on_cpu, 1);
+ }
+ 
+-static inline void finish_task(struct task_struct *prev)
++static __always_inline void finish_task(struct task_struct *prev)
+ {
+ 	/*
+ 	 * This must be the very last reference to @prev from this CPU. After
+@@ -5141,7 +5141,7 @@ static void zap_balance_callbacks(struct rq *rq)
+ 	rq->balance_callback = found ? &balance_push_callback : NULL;
+ }
+ 
+-static void do_balance_callbacks(struct rq *rq, struct balance_callback *head)
++static __always_inline void do_balance_callbacks(struct rq *rq, struct balance_callback *head)
+ {
+ 	void (*func)(struct rq *rq);
+ 	struct balance_callback *next;
+@@ -5176,7 +5176,7 @@ struct balance_callback balance_push_callback = {
+ 	.func = balance_push,
+ };
+ 
+-static inline struct balance_callback *
++static __always_inline struct balance_callback *
+ __splice_balance_callbacks(struct rq *rq, bool split)
+ {
+ 	struct balance_callback *head = rq->balance_callback;
+@@ -5206,7 +5206,7 @@ struct balance_callback *splice_balance_callbacks(struct rq *rq)
+ 	return __splice_balance_callbacks(rq, true);
+ }
+ 
+-void __balance_callbacks(struct rq *rq, struct rq_flags *rf)
++__always_inline void __balance_callbacks(struct rq *rq, struct rq_flags *rf)
+ {
+ 	if (rf)
+ 		rq_unpin_lock(rq, rf);
+@@ -5250,7 +5250,7 @@ prepare_lock_switch(struct rq *rq, struct task_struct *next, struct rq_flags *rf
+ 	__acquire(__rq_lockp(this_rq()));
+ }
+ 
+-static inline void finish_lock_switch(struct rq *rq)
++static __always_inline void finish_lock_switch(struct rq *rq)
+ 	__releases(__rq_lockp(rq))
+ {
+ 	/*
+@@ -5284,7 +5284,7 @@ static inline void kmap_local_sched_out(void)
+ #endif
+ }
+ 
+-static inline void kmap_local_sched_in(void)
++static __always_inline void kmap_local_sched_in(void)
+ {
+ #ifdef CONFIG_KMAP_LOCAL
+ 	if (unlikely(current->kmap_ctrl.idx))
+@@ -5338,7 +5338,7 @@ prepare_task_switch(struct rq *rq, struct task_struct *prev,
+  * past. 'prev == current' is still correct but we need to recalculate this_rq
+  * because prev may have moved to another CPU.
+  */
+-static struct rq *finish_task_switch(struct task_struct *prev)
++static __always_inline struct rq *finish_task_switch(struct task_struct *prev)
+ 	__releases(__rq_lockp(this_rq()))
+ {
+ 	struct rq *rq = this_rq();
+diff --git a/kernel/sched/fair.c b/kernel/sched/fair.c
+index 0f23644..004eb58 100644
+--- a/kernel/sched/fair.c
++++ b/kernel/sched/fair.c
+@@ -82,10 +82,19 @@ unsigned int sysctl_sched_tunable_scaling = SCHED_TUNABLESCALING_LOG;
+  *
+  * (default: 0.70 msec * (1 + ilog(ncpus)), units: nanoseconds)
+  */
++#ifdef CONFIG_ZEN_INTERACTIVE
++unsigned int sysctl_sched_base_slice			= 400000ULL;
++static unsigned int normalized_sysctl_sched_base_slice	= 400000ULL;
++#else
+ unsigned int sysctl_sched_base_slice			= 700000ULL;
+ static unsigned int normalized_sysctl_sched_base_slice	= 700000ULL;
++#endif
+ 
++#ifdef CONFIG_ZEN_INTERACTIVE
++__read_mostly unsigned int sysctl_sched_migration_cost	= 300000UL;
++#else
+ __read_mostly unsigned int sysctl_sched_migration_cost	= 500000UL;
++#endif
+ 
+ static int __init setup_sched_thermal_decay_shift(char *str)
+ {
+@@ -128,8 +137,12 @@ int __weak arch_asym_cpu_priority(int cpu)
+  *
+  * (default: 5 msec, units: microseconds)
+  */
++#ifdef CONFIG_ZEN_INTERACTIVE
++static unsigned int sysctl_sched_cfs_bandwidth_slice		= 3000UL;
++#else
+ static unsigned int sysctl_sched_cfs_bandwidth_slice		= 5000UL;
+ #endif
++#endif
+ 
+ #ifdef CONFIG_NUMA_BALANCING
+ /* Restrict the NUMA promotion throughput (MB/s) for each target node. */

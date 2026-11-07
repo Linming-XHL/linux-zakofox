@@ -53,3 +53,15 @@ dkms.conf
 
 # debug information files
 *.dwo
+
+# linux-zakofox build artifacts
+.build/
+.cache/
+srcdest/
+out/
+ccache/
+src/
+pkg/
+*.pkg.tar.zst
+*.tar.xz
+*.tar.gz

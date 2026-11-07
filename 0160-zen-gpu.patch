@@ -1,0 +1,110 @@
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu.h b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+index a9c6f5d..ce817ec 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu.h
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu.h
+@@ -157,6 +157,7 @@ struct amdgpu_watchdog_timer {
+  */
+ extern int amdgpu_modeset;
+ extern unsigned int amdgpu_vram_limit;
++extern int amdgpu_ignore_min_pcap;
+ extern int amdgpu_vis_vram_limit;
+ extern int amdgpu_gart_size;
+ extern int amdgpu_gtt_size;
+diff --git a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+index d9d794a..e70298e 100644
+--- a/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
++++ b/drivers/gpu/drm/amd/amdgpu/amdgpu_drv.c
+@@ -150,6 +150,7 @@ enum AMDGPU_DEBUG_MASK {
+ };
+ 
+ unsigned int amdgpu_vram_limit = UINT_MAX;
++int amdgpu_ignore_min_pcap = 0; /* do not ignore by default */
+ int amdgpu_vis_vram_limit;
+ int amdgpu_gart_size = -1; /* auto */
+ int amdgpu_gtt_size = -1; /* auto */
+@@ -271,6 +272,15 @@ struct amdgpu_watchdog_timer amdgpu_watchdog_timer = {
+ 	.period = 0x0, /* default to 0x0 (timeout disable) */
+ };
+ 
++/**
++ * DOC: ignore_min_pcap (int)
++ * Ignore the minimum power cap.
++ * Useful on graphics cards where the minimum power cap is very high.
++ * The default is 0 (Do not ignore).
++ */
++MODULE_PARM_DESC(ignore_min_pcap, "Ignore the minimum power cap");
++module_param_named(ignore_min_pcap, amdgpu_ignore_min_pcap, int, 0600);
++
+ /**
+  * DOC: vramlimit (int)
+  * Restrict the total amount of VRAM in MiB for testing.  The default is 0 (Use full VRAM).
+diff --git a/drivers/gpu/drm/amd/pm/amdgpu_pm.c b/drivers/gpu/drm/amd/pm/amdgpu_pm.c
+index c0e6773..2fa7a42 100644
+--- a/drivers/gpu/drm/amd/pm/amdgpu_pm.c
++++ b/drivers/gpu/drm/amd/pm/amdgpu_pm.c
+@@ -3422,6 +3422,9 @@ static ssize_t amdgpu_hwmon_show_power_cap_min(struct device *dev,
+ 					 struct device_attribute *attr,
+ 					 char *buf)
+ {
++	if (amdgpu_ignore_min_pcap)
++		return sysfs_emit(buf, "%i\n", 0);
++
+ 	return amdgpu_hwmon_show_power_cap_generic(dev, attr, buf, PP_PWR_LIMIT_MIN);
+ }
+ 
+diff --git a/drivers/gpu/drm/i915/display/intel_dp.c b/drivers/gpu/drm/i915/display/intel_dp.c
+index 3152122..26c4535 100644
+--- a/drivers/gpu/drm/i915/display/intel_dp.c
++++ b/drivers/gpu/drm/i915/display/intel_dp.c
+@@ -4785,6 +4785,38 @@ intel_edp_set_sink_rates(struct intel_dp *intel_dp)
+ 	intel_edp_set_data_override_rates(intel_dp);
+ }
+ 
++static void intel_edp_wake_sink(struct intel_dp *intel_dp)
++{
++	u8 value = 0;
++	int ret;
++
++	/*
++	 * Read the current sink power state. drm_dp_dpcd_read_byte() already
++	 * retries the AUX transaction internally, so a single read suffices.
++	 * First commercial eDP panels are Ver1.0 or 1.1, on which DPCD
++	 * DP_SET_POWER is supported.
++	 */
++	ret = drm_dp_dpcd_read_byte(&intel_dp->aux, DP_SET_POWER, &value);
++
++	/*
++	 * If the AUX read failed the sink may be asleep and not responding,
++	 * or it read back D3; in either case wake it up to D0.
++	 * In case of AUX read failure which is usually a POR case, the
++	 * remaining bits of register 0x600 is set to '0' on POR. So a bare
++	 * write should be fine.
++	 */
++	if (ret < 0 || value == DP_SET_POWER_D3) {
++		value &= ~DP_SET_POWER_MASK;
++		value |= DP_SET_POWER_D0;
++		drm_dp_dpcd_write_byte(&intel_dp->aux, DP_SET_POWER,
++				       value);
++		/* After setting to D0 need a min of 1ms to wake (Spec DP2.1 sec 2.3.1.2) */
++		fsleep(1000);
++		drm_dp_dpcd_write_byte(&intel_dp->aux, DP_SET_POWER,
++				       value);
++	}
++}
++
+ static bool
+ intel_edp_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *connector)
+ {
+@@ -4795,6 +4827,12 @@ intel_edp_init_dpcd(struct intel_dp *intel_dp, struct intel_connector *connector
+ 	/* this function is meant to be called only once */
+ 	drm_WARN_ON(display->drm, intel_dp->dpcd[DP_DPCD_REV] != 0);
+ 
++	/*
++	 * Spec DP2.1 Section 3.5.2.16 page 966.
++	 * Also if sink is asleep, this will wake the sink.
++	 */
++	intel_edp_wake_sink(intel_dp);
++
+ 	if (drm_dp_read_dpcd_caps(&intel_dp->aux, intel_dp->dpcd) != 0)
+ 		return false;
+ 

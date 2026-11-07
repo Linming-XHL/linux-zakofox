@@ -1,0 +1,92 @@
+name: build
+
+on:
+  workflow_dispatch:
+    inputs:
+      jobs:
+        description: "并行编译任务数（留空 = nproc）"
+        required: false
+        default: ""
+  push:
+    branches: [main]
+    paths:
+      - "PKGBUILD"
+      - "*.config"
+      - "*.patch"
+      - "scripts/**"
+      - ".github/workflows/build.yml"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  KERNEL_VERSION: "7.3.3"
+
+jobs:
+  build:
+    name: 编译 linux-zakofox
+    runs-on: ubuntu-latest
+    container:
+      image: archlinux:base-devel
+      options: --privileged
+    timeout-minutes: 350
+    steps:
+      - name: 安装构建依赖
+        run: |
+          pacman -Syu --noconfirm --needed \
+            base-devel bc ccache cpio file gettext libelf pahole perl \
+            python tar xz zstd sudo git
+          df -h /
+
+      - uses: actions/checkout@v4
+
+      - name: 缓存源码包与 ccache
+        uses: actions/cache@v4
+        with:
+          path: |
+            srcdest
+            ccache
+          key: kbuild-${{ env.KERNEL_VERSION }}-${{ hashFiles('PKGBUILD', '*.config', '*.patch') }}
+          restore-keys: |
+            kbuild-${{ env.KERNEL_VERSION }}-
+
+      - name: 构建软件包
+        run: |
+          set -euo pipefail
+          make_jobs="${{ github.event.inputs.jobs }}"
+          if [ -z "$make_jobs" ]; then make_jobs="$(nproc)"; fi
+          echo "使用 $make_jobs 个编译任务"
+
+          mkdir -p srcdest ccache out
+          useradd -m builder || true
+          chown -R builder:builder "$PWD"
+
+          sudo -u builder env \
+            SRCDEST="$PWD/srcdest" \
+            PKGDEST="$PWD/out" \
+            LOGDEST="$PWD/out" \
+            CCACHE_DIR="$PWD/ccache" \
+            PATH="/usr/lib/ccache/bin:$PATH" \
+            MAKEFLAGS="-j$make_jobs" \
+            makepkg --noconfirm --nocheck --cleanbuild --syncdeps
+
+      - name: 列出产物
+        run: ls -la out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-zakofox-${{ env.KERNEL_VERSION }}
+          path: out/*.pkg.tar.zst
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: 上传构建日志
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: out/*.log
+          if-no-files-found: ignore
+          retention-days: 7

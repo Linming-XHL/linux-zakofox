@@ -1,0 +1,303 @@
+diff --git a/Documentation/admin-guide/kernel-parameters.txt b/Documentation/admin-guide/kernel-parameters.txt
+index e75344f..440ab90 100644
+--- a/Documentation/admin-guide/kernel-parameters.txt
++++ b/Documentation/admin-guide/kernel-parameters.txt
+@@ -2532,6 +2532,9 @@ Kernel parameters
+ 			disable
+ 			  Do not enable intel_pstate as the default
+ 			  scaling driver for the supported processors
++			enable
++			  Enable intel_pstate in-case "disable" was passed
++			  previously in the kernel boot parameters
+                         active
+                           Use intel_pstate driver to bypass the scaling
+                           governors layer of cpufreq and provides it own
+@@ -4693,6 +4696,10 @@ Kernel parameters
+ 
+ 	nosync		[HW,M68K] Disables sync negotiation for all devices.
+ 
++	nothreadirqs	[KNL,EARLY]
++			Disable forced threading of interrupt handlers that
++			is enabled by default with CONFIG_FORCE_IRQ_THREADING.
++
+ 	no_timer_check	[X86,APIC] Disables the code which tests for broken
+ 			timer IRQ sources, i.e., the IO-APIC timer. This can
+ 			work around problems with incorrect timer
+@@ -5302,6 +5309,19 @@ Kernel parameters
+ 				to disable PCIe TLP Processing Hints support
+ 				system-wide.
+ 
++	pcie_acs_override=
++			[PCIE] Assert ACS isolation for PCIe devices
++			lacking it, splitting their IOMMU groups.  Not a
++			security boundary: peer-to-peer DMA between
++			affected devices is unprotected.  Taints the
++			kernel.  Devices with real ACS, and devices the
++			firmware marked untrusted or external-facing, are
++			never affected.  Comma-separated list of:
++		downstream	Downstream and root ports
++		multifunction	Multifunction endpoints and upstream ports
++		id:nnnn:nnnn	Devices with this vendor:device ID, hex,
++				up to 16
++
+ 	pcie_aspm=	[PCIE] Forcibly enable or ignore PCIe Active State Power
+ 			Management.
+ 		off	Don't touch ASPM configuration at all.  Leave any
+@@ -6795,6 +6815,13 @@ Kernel parameters
+ 			cost of significant additional memory use for tables.
+ 
+ 
++	sched_pds_sleep_credit=
++			[KNL] Enable or disable the PDS sleep credit, which
++			moves a task that slept ahead of CPU-bound tasks of
++			the same nice level when it wakes up.
++			Format: <bool>
++			Default: CONFIG_SCHED_PDS_SLEEP_CREDIT
++
+ 	sched_proxy_exec= [KNL]
+ 			Enables or disables "proxy execution" style
+ 			solution to mutex-based priority inversion.
+diff --git a/arch/arm/include/asm/mmu_context.h b/arch/arm/include/asm/mmu_context.h
+index db2cb06..bebde46 100644
+--- a/arch/arm/include/asm/mmu_context.h
++++ b/arch/arm/include/asm/mmu_context.h
+@@ -80,7 +80,7 @@ static inline void check_and_switch_context(struct mm_struct *mm,
+ #ifndef MODULE
+ #define finish_arch_post_lock_switch \
+ 	finish_arch_post_lock_switch
+-static inline void finish_arch_post_lock_switch(void)
++static __always_inline void finish_arch_post_lock_switch(void)
+ {
+ 	struct mm_struct *mm = current->mm;
+ 
+diff --git a/arch/riscv/include/asm/sync_core.h b/arch/riscv/include/asm/sync_core.h
+index 9153016..2fe6b7f 100644
+--- a/arch/riscv/include/asm/sync_core.h
++++ b/arch/riscv/include/asm/sync_core.h
+@@ -6,7 +6,7 @@
+  * RISC-V implements return to user-space through an xRET instruction,
+  * which is not core serializing.
+  */
+-static inline void sync_core_before_usermode(void)
++static __always_inline void sync_core_before_usermode(void)
+ {
+ 	asm volatile ("fence.i" ::: "memory");
+ }
+diff --git a/arch/s390/include/asm/mmu_context.h b/arch/s390/include/asm/mmu_context.h
+index bd1ef5e..95d03be 100644
+--- a/arch/s390/include/asm/mmu_context.h
++++ b/arch/s390/include/asm/mmu_context.h
+@@ -93,7 +93,7 @@ static inline void switch_mm(struct mm_struct *prev, struct mm_struct *next,
+ }
+ 
+ #define finish_arch_post_lock_switch finish_arch_post_lock_switch
+-static inline void finish_arch_post_lock_switch(void)
++static __always_inline void finish_arch_post_lock_switch(void)
+ {
+ 	struct task_struct *tsk = current;
+ 	struct mm_struct *mm = tsk->mm;
+diff --git a/arch/sparc/include/asm/mmu_context_64.h b/arch/sparc/include/asm/mmu_context_64.h
+index 78bbacc..d196721 100644
+--- a/arch/sparc/include/asm/mmu_context_64.h
++++ b/arch/sparc/include/asm/mmu_context_64.h
+@@ -160,7 +160,7 @@ static inline void arch_start_context_switch(struct task_struct *prev)
+ }
+ 
+ #define finish_arch_post_lock_switch	finish_arch_post_lock_switch
+-static inline void finish_arch_post_lock_switch(void)
++static __always_inline void finish_arch_post_lock_switch(void)
+ {
+ 	/* Restore the state of MCDPER register for the new process
+ 	 * just switched to.
+diff --git a/arch/x86/Kconfig.cpu b/arch/x86/Kconfig.cpu
+index 6e7a366..e72e2c2 100644
+--- a/arch/x86/Kconfig.cpu
++++ b/arch/x86/Kconfig.cpu
+@@ -229,6 +229,25 @@ config X86_NATIVE_CPU
+ 
+ 	  If unsure, say N.
+ 
++config X86_64_VERSION
++	int "x86-64 ISA level"
++	range 1 3
++	default 1
++	depends on X86_64 && !X86_NATIVE_CPU
++	depends on CC_IS_CLANG || GCC_VERSION >= 110000
++	help
++	  Build the kernel for an x86-64 psABI micro-architecture level.
++	  The kernel does not boot on a CPU below the selected level.
++
++	  1: x86-64 (baseline)
++	  2: x86-64-v2
++	  3: x86-64-v3
++
++	  Run "/lib64/ld-linux-x86-64.so.2 --help" to see the levels
++	  that this CPU supports.
++
++	  If unsure, say 1.
++
+ config X86_GENERIC
+ 	bool "Generic x86 support"
+ 	depends on X86_32
+diff --git a/arch/x86/Makefile b/arch/x86/Makefile
+index 8af6b80..9c25454 100644
+--- a/arch/x86/Makefile
++++ b/arch/x86/Makefile
+@@ -73,7 +73,7 @@ export BITS
+ #
+ #    https://gcc.gnu.org/bugzilla/show_bug.cgi?id=53383
+ #
+-KBUILD_CFLAGS += -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a
++KBUILD_CFLAGS += -mno-sse -mno-mmx -mno-sse2 -mno-3dnow -mno-avx -mno-sse4a -mno-avx2 -fno-tree-vectorize
+ KBUILD_RUSTFLAGS += --target=$(objtree)/scripts/target.json
+ KBUILD_RUSTFLAGS += -Ctarget-feature=-sse,-sse2,-sse3,-ssse3,-sse4.1,-sse4.2,-avx,-avx2
+ 
+@@ -167,6 +167,9 @@ ifdef CONFIG_X86_NATIVE_CPU
+ 
+         # generate_rust_target.rs handles Rust APX gating.
+         KBUILD_RUSTFLAGS += -Ctarget-cpu=native
++else ifneq ($(filter-out 1,$(CONFIG_X86_64_VERSION)),)
++        KBUILD_CFLAGS += -march=x86-64-v$(CONFIG_X86_64_VERSION) -mtune=generic
++        KBUILD_RUSTFLAGS += -Ctarget-cpu=x86-64-v$(CONFIG_X86_64_VERSION) -Ztune-cpu=generic
+ else
+         KBUILD_CFLAGS += -march=x86-64 -mtune=generic
+         KBUILD_RUSTFLAGS += -Ctarget-cpu=x86-64 -Ztune-cpu=generic
+diff --git a/arch/x86/include/asm/sync_core.h b/arch/x86/include/asm/sync_core.h
+index df22113..3b0ed46 100644
+--- a/arch/x86/include/asm/sync_core.h
++++ b/arch/x86/include/asm/sync_core.h
+@@ -93,7 +93,7 @@ static __always_inline void sync_core(void)
+  * to user-mode. x86 implements return to user-space through sysexit,
+  * sysrel, and sysretq, which are not core serializing.
+  */
+-static inline void sync_core_before_usermode(void)
++static __always_inline void sync_core_before_usermode(void)
+ {
+ 	/* With PTI, we unconditionally serialize before running user code. */
+ 	if (cpu_feature_enabled(X86_FEATURE_PTI))
+diff --git a/arch/x86/kernel/cpu/bus_lock.c b/arch/x86/kernel/cpu/bus_lock.c
+index 177f964..a5c1338 100644
+--- a/arch/x86/kernel/cpu/bus_lock.c
++++ b/arch/x86/kernel/cpu/bus_lock.c
+@@ -47,7 +47,11 @@ static const struct {
+ 
+ static struct ratelimit_state bld_ratelimit;
+ 
++#ifdef CONFIG_ZEN_INTERACTIVE
++static unsigned int sysctl_sld_mitigate;
++#else
+ static unsigned int sysctl_sld_mitigate = 1;
++#endif
+ static DEFINE_SEMAPHORE(buslock_sem, 1);
+ 
+ #ifdef CONFIG_SYSCTL
+diff --git a/drivers/input/evdev.c b/drivers/input/evdev.c
+index 8bfaaa4..cc37779 100644
+--- a/drivers/input/evdev.c
++++ b/drivers/input/evdev.c
+@@ -47,6 +47,7 @@ struct evdev_client {
+ 	struct fasync_struct *fasync;
+ 	struct evdev *evdev;
+ 	struct list_head node;
++	struct rcu_head rcu;
+ 	enum input_clock_type clk_type;
+ 	bool revoked;
+ 	unsigned long *evmasks[EV_CNT];
+@@ -373,13 +374,22 @@ static void evdev_attach_client(struct evdev *evdev,
+ 	spin_unlock(&evdev->client_lock);
+ }
+ 
++static void evdev_reclaim_client(struct rcu_head *rp)
++{
++	struct evdev_client *client = container_of(rp, struct evdev_client, rcu);
++	unsigned int i;
++	for (i = 0; i < EV_CNT; ++i)
++		bitmap_free(client->evmasks[i]);
++	kvfree(client);
++}
++
+ static void evdev_detach_client(struct evdev *evdev,
+ 				struct evdev_client *client)
+ {
+ 	spin_lock(&evdev->client_lock);
+ 	list_del_rcu(&client->node);
+ 	spin_unlock(&evdev->client_lock);
+-	synchronize_rcu();
++	call_rcu(&client->rcu, evdev_reclaim_client);
+ }
+ 
+ static int evdev_open_device(struct evdev *evdev)
+@@ -432,7 +442,6 @@ static int evdev_release(struct inode *inode, struct file *file)
+ {
+ 	struct evdev_client *client = file->private_data;
+ 	struct evdev *evdev = client->evdev;
+-	unsigned int i;
+ 
+ 	mutex_lock(&evdev->mutex);
+ 
+@@ -444,11 +453,6 @@ static int evdev_release(struct inode *inode, struct file *file)
+ 
+ 	evdev_detach_client(evdev, client);
+ 
+-	for (i = 0; i < EV_CNT; ++i)
+-		bitmap_free(client->evmasks[i]);
+-
+-	kvfree(client);
+-
+ 	evdev_close_device(evdev);
+ 
+ 	return 0;
+@@ -491,7 +495,6 @@ static int evdev_open(struct inode *inode, struct file *file)
+ 
+  err_free_client:
+ 	evdev_detach_client(evdev, client);
+-	kvfree(client);
+ 	return error;
+ }
+ 
+diff --git a/fs/btrfs/compression.c b/fs/btrfs/compression.c
+index c62b514..57d2441 100644
+--- a/fs/btrfs/compression.c
++++ b/fs/btrfs/compression.c
+@@ -8,6 +8,7 @@
+ #include <linux/file.h>
+ #include <linux/fs.h>
+ #include <linux/pagemap.h>
++#include <linux/mm_inline.h>
+ #include <linux/folio_batch.h>
+ #include <linux/highmem.h>
+ #include <linux/kthread.h>
+diff --git a/fs/erofs/zdata.c b/fs/erofs/zdata.c
+index 6b07e73..c618bbf 100644
+--- a/fs/erofs/zdata.c
++++ b/fs/erofs/zdata.c
+@@ -6,6 +6,7 @@
+  */
+ #include "compress.h"
+ #include <linux/psi.h>
++#include <linux/mm_inline.h>
+ #include <linux/cpuhotplug.h>
+ #include <trace/events/erofs.h>
+ 
+@@ -1713,7 +1714,7 @@ static void z_erofs_submit_queue(struct z_erofs_frontend *f,
+ 				DBG_BUGON(bvec.bv_len < sb->s_blocksize);
+ 			}
+ 
+-			if (unlikely(PageWorkingset(bvec.bv_page)) &&
++			if (unlikely(folio_test_workingset(page_folio(bvec.bv_page))) &&
+ 			    !memstall) {
+ 				psi_memstall_enter(&pflags);
+ 				memstall = 1;
+diff --git a/include/linux/perf_event.h b/include/linux/perf_event.h
+index 2d5e768..b422c06 100644
+--- a/include/linux/perf_event.h
++++ b/include/linux/perf_event.h
+@@ -1616,7 +1616,7 @@ static inline void perf_event_task_migrate(struct task_struct *task)
+ 		task->sched_migrated = 1;
+ }
+ 
+-static inline void perf_event_task_sched_in(struct task_struct *prev,
++static __always_inline void perf_event_task_sched_in(struct task_struct *prev,
+ 					    struct task_struct *task)
+ {
+ 	if (static_branch_unlikely(&perf_sched_events))

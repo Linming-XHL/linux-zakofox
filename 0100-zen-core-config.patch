@@ -1,0 +1,130 @@
+diff --git a/Makefile b/Makefile
+index a8f35bd..fb413f0 100644
+--- a/Makefile
++++ b/Makefile
+@@ -3,7 +3,7 @@ VERSION = 7
+ PATCHLEVEL = 3
+ SUBLEVEL = 3
+ EXTRAVERSION =
+-NAME = Baby Opossum Posse
++NAME = Zakofox
+ 
+ # *DOCUMENTATION*
+ # To see a list of typical targets execute "make help"
+@@ -932,6 +932,9 @@ KBUILD_CFLAGS	+= -fno-delete-null-pointer-checks
+ ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE
+ KBUILD_CFLAGS += -O2
+ KBUILD_RUSTFLAGS += -Copt-level=2
++else ifdef CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3
++KBUILD_CFLAGS += -O3
++KBUILD_RUSTFLAGS += -Copt-level=3
+ else ifdef CONFIG_CC_OPTIMIZE_FOR_SIZE
+ KBUILD_CFLAGS += -Os
+ KBUILD_RUSTFLAGS += -Copt-level=s
+diff --git a/init/Kconfig b/init/Kconfig
+index 13bc532..6b37146 100644
+--- a/init/Kconfig
++++ b/init/Kconfig
+@@ -223,6 +223,46 @@ config THREAD_INFO_IN_TASK
+ 
+ menu "General setup"
+ 
++config ZEN_INTERACTIVE
++	bool "Tune kernel for interactivity"
++	default y
++	help
++	  Tunes the kernel for responsiveness at the cost of throughput and power
++	  usage.
++
++	  --- Block Layer ----------------------------------------
++
++	    Default scheduler for SQ..: mq-deadline ->   bfq
++	    Default scheduler for MQ..:        none ->   kyber
++
++	  --- Virtual Memory Subsystem ---------------------------
++
++	    Background-reclaim hugepages...:   no   ->   yes
++	    Compact unevictable............:   yes  ->   no
++	    Swap-in readahead..............:   3    ->   0
++
++	  --- EEVDF CPU Scheduler --------------------------------
++
++	    Minimal granularity............:   0.7  ->   0.4  ms
++	    Migration cost.................:   0.5  ->   0.3  ms
++	    Bandwidth slice size...........:   5    ->   3    ms
++	    Task rebalancing threshold.....:  32    ->   8
++
++	  --- PDS/BMQ CPU Scheduler ------------------------------
++
++	    Scheduling timeslice...........:   4    ->   2    ms
++	    PDS sleep credit...............:   0    ->   1
++
++	  --- CPUFreq Settings -----------------------------------
++
++	    Ondemand sampling down factor..:   1    ->   5
++	    Ondemand default up threshold..:  80    ->  55
++	    Ondemand micro up threshold....:  95    ->  60
++
++	  --- Split/Bus lock detection --------------------------
++
++	    Split lock mitigation..........:   1    ->   0
++
+ config BROKEN
+ 	bool
+ 	help
+@@ -962,6 +1002,7 @@ if SCHED_ALT
+ 
+ choice
+ 	prompt "Alternative CPU Scheduler"
++	default SCHED_PDS if ZEN_INTERACTIVE
+ 	default SCHED_BMQ
+ 
+ config SCHED_BMQ
+@@ -1699,6 +1740,12 @@ config CC_OPTIMIZE_FOR_PERFORMANCE
+ 	  with the "-O2" compiler flag for best performance and most
+ 	  helpful compile-time warnings.
+ 
++config CC_OPTIMIZE_FOR_PERFORMANCE_O3
++	bool "Optimize more for performance (-O3)"
++	help
++	  Choosing this option will pass "-O3" to your compiler to optimize
++	  the kernel yet more for performance.
++
+ config CC_OPTIMIZE_FOR_SIZE
+ 	bool "Optimize for size (-Os)"
+ 	help
+diff --git a/init/Makefile b/init/Makefile
+index d6f75d8..b3d6a2b 100644
+--- a/init/Makefile
++++ b/init/Makefile
+@@ -34,7 +34,7 @@ build-timestamp = $(or $(KBUILD_BUILD_TIMESTAMP), $(build-timestamp-auto))
+ 
+ # Maximum length of UTS_VERSION is 64 chars
+ filechk_uts_version = \
+-	utsver=$$(echo '$(pound)'"$(build-version)" $(smp-flag-y) $(preempt-flag-y) "$(build-timestamp)" | cut -b -64); \
++	utsver=$$(echo '$(pound)'"$(build-version)" ZEN $(smp-flag-y) $(preempt-flag-y) "$(build-timestamp)" | cut -b -64); \
+ 	echo '$(pound)'define UTS_VERSION \""$${utsver}"\"
+ 
+ #
+diff --git a/kernel/sched/debug.c b/kernel/sched/debug.c
+index 70b7c34..e187585 100644
+--- a/kernel/sched/debug.c
++++ b/kernel/sched/debug.c
+@@ -641,7 +641,7 @@ static void debugfs_fair_server_init(void)
+ }
+ #endif /* !CONFIG_SCHED_ALT */
+ 
+-#ifdef CONFIG_FAIR_GROUP_SCHED
++#if defined(CONFIG_FAIR_GROUP_SCHED) && !defined(CONFIG_SCHED_ALT)
+ static int cgroup_mode = 2;
+ 
+ /* See __sched_cgroup_mode_update(). */
+@@ -774,7 +774,7 @@ static __init int sched_init_debug(void)
+ 	debugfs_create_file("debug", 0444, debugfs_sched, NULL, &sched_debug_fops);
+ #endif /* !CONFIG_SCHED_ALT */
+ 
+-#ifdef CONFIG_FAIR_GROUP_SCHED
++#if defined(CONFIG_FAIR_GROUP_SCHED) && !defined(CONFIG_SCHED_ALT)
+ 	debugfs_create_file("cgroup_mode", 0644, debugfs_sched, NULL, &sched_cgroup_fops);
+ #endif
+ 
