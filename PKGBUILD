@@ -141,6 +141,7 @@ package_linux-zakofox() {
 package_linux-zakofox-headers() {
   pkgdesc="Headers and scripts for building modules for the $pkgbase kernel"
   depends=(
+    "$pkgbase=$pkgver-$pkgrel"
     binutils
     glibc
     libelf
@@ -164,7 +165,10 @@ package_linux-zakofox-headers() {
   for f in localversion.*; do
     [[ -e $f ]] && install -Dt "$builddir" -m644 "$f"
   done
-  install -Dt "$builddir/tools/bpf/bpftool" -m644 tools/bpf/bpftool/vmlinux.h
+  # vmlinux.h 需要 CONFIG_DEBUG_INFO_BTF；本内核与 Liquorix 一样关闭 BTF
+  if [[ -f tools/bpf/bpftool/vmlinux.h ]]; then
+    install -Dt "$builddir/tools/bpf/bpftool" -m644 tools/bpf/bpftool/vmlinux.h
+  fi
   # 外部模块的 kbuild 会 include 这两个 Makefile
   install -Dt "$builddir/kernel" -m644 kernel/Makefile
   install -Dt "$builddir/arch/x86" -m644 arch/x86/Makefile
