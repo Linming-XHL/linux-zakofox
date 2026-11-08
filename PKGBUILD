@@ -140,7 +140,17 @@ package_linux-zakofox() {
 
 package_linux-zakofox-headers() {
   pkgdesc="Headers and scripts for building modules for the $pkgbase kernel"
-  depends=("$pkgbase=$pkgver-$pkgrel" coreutils)
+  depends=(
+    binutils
+    glibc
+    libelf
+    libgcc
+    openssl
+    pahole
+    xxhash
+    zlib
+    zstd
+  )
   provides=("$pkgbase-headers=$pkgver-$pkgrel" linux-headers)
   conflicts=(linux-headers)
 
@@ -149,23 +159,56 @@ package_linux-zakofox-headers() {
   local builddir="$pkgdir/usr/lib/modules/$(<version)/build"
 
   echo "Installing build files..."
-  install -m644 -Dt "$builddir" .config Makefile Module.symvers System.map version vmlinux
+  install -Dt "$builddir" -m644 .config Makefile Module.symvers System.map version vmlinux
   local f
   for f in localversion.*; do
-    [[ -e $f ]] && install -m644 -Dt "$builddir" "$f"
+    [[ -e $f ]] && install -Dt "$builddir" -m644 "$f"
   done
-  install -dm755 "$builddir/tools/bpf/bpftool"
-  if [[ -f tools/bpf/bpftool/vmlinux.h ]]; then
-    install -m644 tools/bpf/bpftool/vmlinux.h "$builddir/tools/bpf/bpftool/vmlinux.h"
+  install -Dt "$builddir/tools/bpf/bpftool" -m644 tools/bpf/bpftool/vmlinux.h
+  # 外部模块的 kbuild 会 include 这两个 Makefile
+  install -Dt "$builddir/kernel" -m644 kernel/Makefile
+  install -Dt "$builddir/arch/x86" -m644 arch/x86/Makefile
+
+  cp -t "$builddir" -a scripts
+  ln -srt "$builddir" "$builddir/scripts/gdb/vmlinux-gdb.py"
+
+  if [[ $(scripts/config -s CONFIG_HAVE_STACK_VALIDATION) = y ]]; then
+    install -Dt "$builddir/tools/objtool" tools/objtool/objtool
+  fi
+  if [[ $(scripts/config -s CONFIG_DEBUG_INFO_BTF_MODULES) = y ]]; then
+    install -Dt "$builddir/tools/bpf/resolve_btfids" tools/bpf/resolve_btfids/resolve_btfids
   fi
 
   echo "Installing headers..."
-  cp -a include "$builddir"
-  cp -a arch/x86/include "$builddir/arch/x86/"
-  cp -a scripts "$builddir"
+  cp -t "$builddir" -a include
+  cp -t "$builddir/arch/x86" -a arch/x86/include
+  install -Dt "$builddir/arch/x86/kernel" -m644 arch/x86/kernel/asm-offsets.s
+
+  install -Dt "$builddir/drivers/md" -m644 drivers/md/*.h
+  install -Dt "$builddir/net/mac80211" -m644 net/mac80211/*.h
+
+  # https://bugs.archlinux.org/task/13146
+  install -Dt "$builddir/drivers/media/i2c" -m644 drivers/media/i2c/msp3400-driver.h
+
+  # https://bugs.archlinux.org/task/20402
+  install -Dt "$builddir/drivers/media/usb/dvb-usb" -m644 drivers/media/usb/dvb-usb/*.h
+  install -Dt "$builddir/drivers/media/dvb-frontends" -m644 drivers/media/dvb-frontends/*.h
+  install -Dt "$builddir/drivers/media/tuners" -m644 drivers/media/tuners/*.h
+
+  # https://bugs.archlinux.org/task/71392
+  install -Dt "$builddir/drivers/iio/common/hid-sensors" -m644 drivers/iio/common/hid-sensors/*.h
 
   echo "Installing KConfig files..."
   find . -name 'Kconfig*' -exec install -Dm644 {} "$builddir/"{} \;
+
+  if [[ $(scripts/config -s CONFIG_RUST) = y ]]; then
+    echo "Installing Rust files..."
+    install -Dt "$builddir/rust" -m644 rust/*.rmeta
+    install -Dt "$builddir/rust" rust/*.so
+  fi
+
+  echo "Installing unstripped VDSO..."
+  make INSTALL_MOD_PATH="$pkgdir/usr" vdso_install link=
 
   echo "Removing unneeded architectures..."
   local arch
@@ -188,15 +231,15 @@ package_linux-zakofox-headers() {
   local file
   while read -rd '' file; do
     case "$(file -S -b -L --mime-type "$file")" in
-      application/x-sharedlib\;*)    strip -v "$file" ;;
-      application/x-archive\;*)      strip -v "$file" ;;
-      application/x-executable\;*)   strip -v "$file" ;;
-      application/x-pie-executable\;*) strip -v "$file" ;;
+      application/x-sharedlib\;*)    strip -v ${STRIP_SHARED:--S} "$file" ;;
+      application/x-archive\;*)      strip -v ${STRIP_STATIC:--S} "$file" ;;
+      application/x-executable\;*)   strip -v ${STRIP_BINARIES:--S} "$file" ;;
+      application/x-pie-executable\;*) strip -v ${STRIP_SHARED:--S} "$file" ;;
     esac
-  done < <(find "$builddir" -type f -perm -u+x -print0)
+  done < <(find "$builddir" -type f -perm -u+x ! -name vmlinux -print0)
 
   echo "Stripping vmlinux..."
-  strip -v "$builddir/vmlinux"
+  strip -v ${STRIP_STATIC:--S} "$builddir/vmlinux"
 
   echo "Adding symlink..."
   mkdir -p "$pkgdir/usr/src"
