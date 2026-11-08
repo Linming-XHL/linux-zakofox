@@ -36,7 +36,7 @@ source=(
   0100-zen-core-config.patch
   0110-zen-sched.patch
   0120-zen-mm-zswap.patch
-  0130-zen-block-zram.patch
+  0130-zen-block-elevator.patch
   0140-zen-tcp.patch
   0150-zen-cpufreq.patch
   0160-zen-gpu.patch
@@ -47,13 +47,13 @@ source=(
 )
 sha256sums=(
   '79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1'
-  '5dffbe09ab27def9159656f3692f5d32f80e6decad0f756c80d2f55e80743030'
+  '3460e9baab45dce6caaa4a367ac1ce3d0ed30299ad4fbf536f451e07c5c9e508'
   'ed3de48f23ef25c64a8b0124451a7338c6ad51816baf7bcb8c4ee7c5f277867b'
   '9c40a638126adc2b5973f00aa09b30ce1b105c716f230c2fab9d538b254da74b'
   '195f1467522ddbf2698b4d37bb5f1944b1fa85859ce61babe14b62c41a47fa18'
   '436fcb0752d8771d7267aa85a78f6d3da79cc88678f9addb9f9d7f7ca7a8edbd'
   '3bd0c07e164430b7c8cbd1428249efbda8efab6294eed316708079967fbd9ef7'
-  'bae29c4947882c6ebd6e5f516399214f49f75730a9cd106f10f66b171e828e57'
+  '6d509c3535684ff65151c2e0169ebb4237eac35f07dd0fc15b98cbc17aa01977'
   '40138d283071bef4f55c0875b7e7fdbc54b7eebd3a70ee3d50d7e4b915366148'
   '5d275f87d83e5b096260c4f7cf990276fc344074a90defbf7cdda91cb6ee8eda'
   '72abfd2c88c1997b8d997363cc8497f72c146c683b89c2e118fc362f64704227'
@@ -69,7 +69,7 @@ _patches=(
   0100-zen-core-config.patch
   0110-zen-sched.patch
   0120-zen-mm-zswap.patch
-  0130-zen-block-zram.patch
+  0130-zen-block-elevator.patch
   0140-zen-tcp.patch
   0150-zen-cpufreq.patch
   0160-zen-gpu.patch
@@ -98,7 +98,7 @@ prepare() {
   if ! diff -u "$srcdir/zakofox-x86_64.config" .config >/dev/null; then
     warning "内核配置相对 zakofox-x86_64.config 发生漂移："
     diff -u "$srcdir/zakofox-x86_64.config" .config \
-      | grep '^[+-]' | grep -v '^[+-][+-]' || true
+      | grep -E '^[+-][^+-]' | grep -vE '^[+-]$' || true
   fi
 }
 

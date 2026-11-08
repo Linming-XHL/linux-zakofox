@@ -23,8 +23,8 @@
 - **zen 调优**：`CONFIG_ZEN_INTERACTIVE=y`（block / VM / EEVDF / PDS / CPUFreq / split-lock 六类）
 - **中文控制台**：`CONFIG_FONT_CJK_16x16` + `CONFIG_FONT_CJK_32x32`
 - **网络**：BBR3 拥塞控制（`CONFIG_TCP_CONG_BBR3`），默认仍为 BBR
-- **存储**：zram + zcomp 后端（lz4 / lz4hc / zstd / 842 / lzo / lzorle）
-- **虚拟光驱**：`drivers/scsi/vhba`（`VHBA-MODULE`）
+- **存储**：zen 的 IO 调度器默认策略（BFQ 优先，多队列回落到 Kyber）；zram 沿用 7.3 上游实现
+- **虚拟光驱**：`drivers/scsi/vhba`（`CONFIG_VHBA=m`，`VHBA-MODULE`）
 - **PCI**：ACS override 补丁
 - **CPU 上限**：`CONFIG_NR_CPUS=128`（非 MAXSMP）
 - **调试信息**：关闭（`DEBUG_INFO_NONE`），体积小、编译快
