@@ -82,7 +82,11 @@ PDS 的特点是「每 CPU 一个运行队列 + 位图选核 + 不需要全局�
 
 16×16 字体数据由补丁内联携带：65536 个字形 × 32 字节 = 2 MB 二进制，写成
 `/* 序号 0xXXXX */` 注释的 C 数组后 `font_cjk_16x16.h` 是 12 MB 文本。
-**32×32 的 `.h` 在补丁里是空文件**，见「已知问题」。
+上游 cjktty 的 32×32 字形表（`font_cjk_32x32.h`）在 7.2 系列补丁里是空文件，
+`.charcount` 却声明为 `65536 * 2`，编进去只会得到一张越界可读的空表，因此本内核
+**把 `CONFIG_FONT_CJK_32x32` 关掉**：16 行字体（默认）下中文完全正常，`bitblit.c` 的
+`if (!font || !font->data) return vc->vc_font.data;` 会让 32 行字体回落到 ASCII 字形而不是越界读。
+需要 32×32 中文时用 `scripts/gen-cjk-font.py --size 32` 生成数据、打开开关再重编。
 
 ### 0100 · 核心配置项（4 个文件）
 
@@ -161,13 +165,16 @@ PDS 的特点是「每 CPU 一个运行队列 + 位图选核 + 不需要全局�
 `drivers/pci/quirks.c`：`pcie_acs_override=` 参数（`downstream` / `multifunction` / `id:vvvv:dddd`），
 把没有真实 ACS 的设备拆成独立 IOMMU 组，方便 VFIO 直通。**会 taint 内核**，且不是安全边界。
 
-### 0180 · 中断与时间（6 个文件）
+### 0180 · 中断与时间（5 个文件）
 
-- `kernel/irq/Kconfig` + `kernel/irq/manage.c`：新增 `CONFIG_FORCE_IRQ_THREADING`（默认关）
-  与 `nothreadirqs` 命令行反转开关。
-- `kernel/time/tick-sched.h`、`include/linux/vtime.h`、`kernel/sched/cputime.c`：
-  `tick_nohz_full_enabled()` / `tick_nohz_task_switch()` / `vtime_accounting_enabled*()` /
-  `vtime_task_switch()` 改 `__always_inline`，减少每 tick 与上下文切换的函数调用开销。
+- `kernel/irq/Kconfig` + `kernel/irq/manage.c`、`include/linux/interrupt.h`：新增
+  `CONFIG_FORCE_IRQ_THREADING`（默认关）与 `nothreadirqs` 命令行反转开关，
+  `force_irqthreads()` 在开启时走 static key（`static_branch_likely`）而不是常量判断。
+- `include/linux/tick.h`、`include/linux/vtime.h`：`tick_nohz_full_enabled()`、
+  `tick_nohz_task_switch()`、`vtime_accounting_enabled*()`、`vtime_task_switch()`
+  改 `__always_inline`，减少每 tick 与上下文切换的函数调用开销。
+- 原来还带一个 Debian 式的 `unprivileged_userns_clone`（`kernel/fork.c`），
+  因依赖 7.3 不存在的 `CONFIG_USER_NS_UNPRIVILEGED` 且会让非特权沙箱默认失效，已整段移除。
 
 ### 0190 · 虚拟光驱（5 个文件）
 
@@ -206,7 +213,7 @@ PDS 的特点是「每 CPU 一个运行队列 + 位图选核 + 不需要全局�
 | `CONFIG_LTO_NONE` | `y` | 避免 LTO 与 cjktty 大字体文件、PDS 的编译期问题 |
 | `CONFIG_LOCALVERSION` | `"-zakofox"` | 版本串；`LOCALVERSION_AUTO` 关 |
 | `CONFIG_DEBUG_INFO_NONE` | `y` | 不要 DWARF/BTF，包体积从数百 MB 降到 ~160 MB |
-| `CONFIG_FONT_CJK_16x16` / `FONT_CJK_32x32` | `y` / `y` | 控制台中文 |
+| `CONFIG_FONT_CJK_16x16` | `y` | 控制台中文（16 行字体）；32×32 因上游字形表为空而关闭 |
 | `CONFIG_TCP_CONG_BBR3` | `y` | 可选拥塞控制；`CONFIG_DEFAULT_TCP_CONG="cubic"` 保持上游默认 |
 | `CONFIG_ZSWAP` + `ZSWAP_DEFAULT_ON` | `y` / `y`，压缩器 `zstd` | 内存紧张时的兜底，无需手动开 |
 | `CONFIG_ZRAM` | `y`，默认 `zstd` 多后端 | 沿用 7.3 上游实现（见下） |
@@ -298,18 +305,18 @@ python3 scripts/gen-cjk-font.py --font /usr/share/fonts/TTF/YourFont.ttf --size 
 
 ## 已知问题
 
-- **32×32 CJK 字体是空表**：`CONFIG_FONT_CJK_32x32=y` 但 `lib/fonts/font_cjk_32x32.h` 在补丁里
-  是 0 字节，`.charcount` 却声明为 `65536 * 2`。控制台用 16 行字体（默认）时不会走这条路径，
-  一旦把 VT 字体设成 32 行（`setfont` 一个大字体），中文查表会读到越界数据。
-  修法二选一：用 `scripts/gen-cjk-font.py --size 32` 生成数据补进补丁，
-  或直接 `CONFIG_FONT_CJK_32x32` 关闭。
-- **非特权 user namespace 默认关闭**：`0180` 带入了 `kernel.unprivileged_userns_clone` sysctl，
-  在 7.3 上游没有 `CONFIG_USER_NS_UNPRIVILEGED` 这个选项，因此默认值落到 0，
-  会让 bwrap/Flatpak/Firefox 这类非特权沙箱失败。临时可 `sysctl -w kernel.unprivileged_userns_clone=1`，
-  长期应把该 hunk 从 `0180` 中移除。
 - **`-O3` 未启用**：`0100` 提供了 `CONFIG_CC_OPTIMIZE_FOR_PERFORMANCE_O3`，但配置里仍是 `-O2`。
+  想试可以把开关打开重编，注意 `-O3` 在部分子系统（尤其 `fs/`、`net/`）历史上出过边界问题，出问题先退回。
+- **32×32 中文未启用**：见 `0002` 一节的说明，上游字形表为空文件，故主动关闭；需要时用
+  `scripts/gen-cjk-font.py --size 32` 自行生成。
 - **zram 未做 zen 式重构**：7.3 上游已有 `CONFIG_ZRAM_BACKEND_*` 多后端与 `zcomp` 新接口，
   旧式 zram 补丁在其上会编译失败，因此 zram 完全走上游实现，只保留块层默认调度器的调优。
+- **构建前缀不感知 ccache 以外的加速**：本机 4 核实测约 3～5 小时；CI 冷缓存约 2 小时 15 分，
+  热缓存（`hashFiles` 未变时）会快一些，但内核一旦改动源码级内容就全量重编。
+
+> 已修掉的两项：`0180` 里 Debian 式的 `unprivileged_userns_clone`（依赖 7.3 不存在的
+> `CONFIG_USER_NS_UNPRIVILEGED`，会默认禁掉非特权 user namespace，破坏 bwrap/Flatpak/Firefox 沙箱）
+> 已从补丁中移除，回到上游「非特权 userns 默认允许」；空的 32×32 CJK 字形表也通过配置关闭。
 
 ## 许可
 

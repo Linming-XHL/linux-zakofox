@@ -47,7 +47,7 @@ source=(
 )
 sha256sums=(
   '79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1'
-  '3460e9baab45dce6caaa4a367ac1ce3d0ed30299ad4fbf536f451e07c5c9e508'
+  'e24a3989d532cd769c2192b8f9fd0cdd422c9c044af3addb214953489ead1c97'
   'ed3de48f23ef25c64a8b0124451a7338c6ad51816baf7bcb8c4ee7c5f277867b'
   '9c40a638126adc2b5973f00aa09b30ce1b105c716f230c2fab9d538b254da74b'
   '195f1467522ddbf2698b4d37bb5f1944b1fa85859ce61babe14b62c41a47fa18'
@@ -58,7 +58,7 @@ sha256sums=(
   '5d275f87d83e5b096260c4f7cf990276fc344074a90defbf7cdda91cb6ee8eda'
   '72abfd2c88c1997b8d997363cc8497f72c146c683b89c2e118fc362f64704227'
   '6747d8767f4389732ee4d254f0bb1e5c0f48823b481c1928c7562154d9782c4a'
-  '6b624e18aae4b10c8f42822763de0f3c00349ae36b8f12158c6afd209958bacf'
+  '78a2c324b0323ef3c5bdfd24f95c56d149eabee3f1a3d78071e76647e274093c'
   '7ff28ead30720ca0a4f250566be39846653bf41edf7389397f891ff1903a2aff'
   '509b2fc01fbf493d0da237a528b10af92b523753c0c701dcd74aa6c95d74a886'
 )
@@ -88,8 +88,19 @@ prepare() {
   local p
   for p in "${_patches[@]}"; do
     msg2 "应用 $p"
-    patch -Np1 --no-backup-if-mismatch -i "$srcdir/$p"
+    # 补丁失败必须立刻中止：继续下去只会得到一棵语义被悄悄改过的树，
+    # 错误往往要到几十分钟后的编译阶段才暴露，且报错位置与真正原因无关。
+    if ! patch -Np1 --no-backup-if-mismatch -i "$srcdir/$p"; then
+      error "$p 应用失败，见上方 hunk 与 .rej"
+      return 1
+    fi
   done
+
+  if find . -name '*.rej' -print -quit | grep -q .; then
+    error "补丁目录里还有 .rej 文件，说明有 hunk 没贴上"
+    find . -name '*.rej'
+    return 1
+  fi
 
   cp "$srcdir/zakofox-x86_64.config" .config
   make olddefconfig
