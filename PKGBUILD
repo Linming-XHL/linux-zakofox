@@ -9,9 +9,9 @@
 #   01xx  zen 调优补丁（按子系统拆分）
 pkgbase=linux-zakofox
 pkgname=("$pkgbase" "$pkgbase-headers")
-pkgver=7.3.3
+pkgver=7.4rc3
 pkgrel=1
-_srcname=linux-${pkgver}
+_srcname=linux-7.4-rc3
 arch=(x86_64)
 url="https://github.com/Linming-XHL/linux-zakofox"
 license=(GPL-2.0-only)
@@ -29,7 +29,7 @@ makedepends=(
 )
 options=(!debug !strip)
 source=(
-  "$_srcname.tar.xz::https://mirrors.edge.kernel.org/pub/linux/kernel/v${pkgver%%.*}.x/$_srcname.tar.xz"
+  "$_srcname.tar.gz::https://git.kernel.org/torvalds/t/$_srcname.tar.gz"
   zakofox-x86_64.config
   0001-zakofox-prjc-pds-7.3.patch
   0002-zakofox-cjktty-7.2.patch
@@ -46,7 +46,7 @@ source=(
   0200-zen-arch-misc.patch
 )
 sha256sums=(
-  '79c66dde66cd96877fcde8f7d36aec946b1f423d2b97b5a7b1751b75c764f3d1'
+  '95c0eb4a051dd09983d6b7887bdd9d323559fccda163c627d398c0547b89f961'
   'e24a3989d532cd769c2192b8f9fd0cdd422c9c044af3addb214953489ead1c97'
   'ed3de48f23ef25c64a8b0124451a7338c6ad51816baf7bcb8c4ee7c5f277867b'
   '9c40a638126adc2b5973f00aa09b30ce1b105c716f230c2fab9d538b254da74b'
