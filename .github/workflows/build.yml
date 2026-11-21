@@ -7,8 +7,10 @@ on:
         description: "并行编译任务数（留空 = nproc）"
         required: false
         default: ""
-  push:
+  pull_request:
     branches: [main]
+  push:
+    branches: [main, "port/linux-7.4-rc3"]
     paths:
       - "PKGBUILD"
       - "*.config"
@@ -21,7 +23,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KERNEL_VERSION: "7.3.3"
+  KERNEL_VERSION: "7.4-rc3"
 
 jobs:
   build:
@@ -70,6 +72,20 @@ jobs:
             PATH="/usr/lib/ccache/bin:$PATH" \
             MAKEFLAGS="-j$make_jobs" \
             makepkg --noconfirm --nocheck --cleanbuild --syncdeps
+
+      - name: 输出补丁冲突诊断
+        if: failure()
+        run: |
+          echo "=== rejected hunks ==="
+          find . -name '*.rej' -print -exec cat {} \; || true
+          echo "=== sched.h context ==="
+          if [ -f src/linux-7.4-rc3/include/linux/sched.h ]; then
+            sed -n '855,930p' src/linux-7.4-rc3/include/linux/sched.h
+          fi
+          echo "=== syscalls.c context ==="
+          if [ -f src/linux-7.4-rc3/kernel/sched/syscalls.c ]; then
+            sed -n '680,850p' src/linux-7.4-rc3/kernel/sched/syscalls.c
+          fi
 
       - name: 列出产物
         run: ls -la out

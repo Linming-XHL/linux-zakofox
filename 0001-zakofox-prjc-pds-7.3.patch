@@ -184,11 +184,13 @@ index d35ae49a991f7..f2534316c92f7 100644
  	unsigned int			wakee_flips;
  	unsigned long			wakee_flip_decay_ts;
  	struct task_struct		*last_wakee;
-@@ -880,12 +881,26 @@ struct task_struct {
+@@ -880,14 +881,28 @@ struct task_struct {
  	 */
  	int				recent_used_cpu;
  	int				wake_cpu;
 +#endif /* !CONFIG_SCHED_ALT */
+ 	/* CPU charged while is_blocked && in_iowait. */
+ 	int				iowait_cpu;
  
  	int				prio;
  	int				static_prio;
@@ -11277,7 +11279,7 @@ index b215b0ead9a60..1e736f2b0a776 100644
  	if (user) {
  #ifdef CONFIG_RT_GROUP_SCHED
  		/*
-@@ -635,16 +720,22 @@ int __sched_setscheduler(struct task_struct *p,
+@@ -635,18 +720,24 @@ int __sched_setscheduler(struct task_struct *p,
  			}
  		}
  	}
@@ -11291,8 +11293,10 @@ index b215b0ead9a60..1e736f2b0a776 100644
 +#else
  		task_rq_unlock(rq, p, &rf);
 +#endif /* !CONFIG_SCHED_ALT */
- 		if (cpuset_locked)
+ 		if (cpuset_locked) {
  			cpuset_unlock();
+ 			cpuset_locked = false;
+ 		}
  		goto recheck;
  	}
  
@@ -11317,7 +11321,7 @@ index b215b0ead9a60..1e736f2b0a776 100644
  	if (pi) {
  		/*
  		 * Take priority boosted tasks into account. If the new
-@@ -672,21 +768,27 @@ int __sched_setscheduler(struct task_struct *p,
+@@ -672,23 +768,29 @@ int __sched_setscheduler(struct task_struct *p,
  			queue_flags &= ~DEQUEUE_MOVE;
  	}
  
@@ -11327,6 +11331,8 @@ index b215b0ead9a60..1e736f2b0a776 100644
  
  	if (prev_class != next_class)
  		queue_flags |= DEQUEUE_CLASS;
+ 
+ 	scx_prepare_setscheduler(p, policy);
 +#endif /* !CONFIG_SCHED_ALT */
  
  	scoped_guard (sched_change, p, queue_flags) {
