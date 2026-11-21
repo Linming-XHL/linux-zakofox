@@ -73,6 +73,20 @@ jobs:
             MAKEFLAGS="-j$make_jobs" \
             makepkg --noconfirm --nocheck --cleanbuild --syncdeps
 
+      - name: 输出补丁冲突诊断
+        if: failure()
+        run: |
+          echo "=== rejected hunks ==="
+          find . -name '*.rej' -print -exec cat {} \; || true
+          echo "=== sched.h context ==="
+          if [ -f src/linux-7.4-rc3/include/linux/sched.h ]; then
+            sed -n '855,930p' src/linux-7.4-rc3/include/linux/sched.h
+          fi
+          echo "=== syscalls.c context ==="
+          if [ -f src/linux-7.4-rc3/kernel/sched/syscalls.c ]; then
+            sed -n '680,850p' src/linux-7.4-rc3/kernel/sched/syscalls.c
+          fi
+
       - name: 列出产物
         run: ls -la out
 
