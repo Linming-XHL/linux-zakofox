@@ -7,6 +7,8 @@ on:
         description: "并行编译任务数（留空 = nproc）"
         required: false
         default: ""
+  pull_request:
+    branches: [main]
   push:
     branches: [main, "port/linux-7.4-rc3"]
     paths:
