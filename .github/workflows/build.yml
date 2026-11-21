@@ -8,7 +8,7 @@ on:
         required: false
         default: ""
   push:
-    branches: [main]
+    branches: [main, "port/linux-7.4-rc3"]
     paths:
       - "PKGBUILD"
       - "*.config"
@@ -21,7 +21,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  KERNEL_VERSION: "7.3.3"
+  KERNEL_VERSION: "7.4-rc3"
 
 jobs:
   build:
